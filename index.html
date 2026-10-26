@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ระบบจองโต๊ะเรียน</title>
+<title>Classroom Seat Booking 7B · 3D Edition</title>
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -219,7 +219,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
         <button class="btn primary" id="layoutOpen">▦ สร้างผัง 20 รูปแบบ</button><button class="btn blue" id="flipSelected">⇄ กลับด้านที่เลือก</button>
         <button class="btn blue" id="repairLayout">จัดโต๊ะที่กระจัดกระจายใหม่ (เก็บข้อมูลจอง)</button>
         <button class="btn yellow" id="resetLayout">คืนตำแหน่งเริ่มต้น</button>
-        <button class="btn" id="exportData">ส่งออกข้อมูล</button>
+        <button class="btn" id="exportData">บันทึกภาพผังห้องเรียน</button>
         <button class="btn" id="importData">นำเข้าข้อมูล</button>
         <input type="file" accept="application/json" id="importFile" class="hidden">
       </div>
@@ -341,6 +341,17 @@ button:disabled{opacity:.45;cursor:not-allowed}
   <div id="layoutNote" class="note">การใช้ผังใหม่จะปรับจำนวนโต๊ะและตำแหน่งใหม่ ข้อมูลการจองเดิมอาจถูกลบ</div>
   <div class="mini-title" style="margin:18px 0 8px">★ รายการโปรด <span id="favoriteCount"></span></div><p class="note">รายการที่ติดดาวจะคงอยู่เมื่อสร้างผังใหม่ กดดาวอีกครั้งเพื่อยกเลิก</p><div id="favoriteGrid" class="layout-grid"></div><div class="divider"></div><div class="mini-title" style="margin:18px 0 8px">รูปแบบที่สร้างใหม่ <span id="generationNumber"></span></div><div id="layoutGrid" class="layout-grid"></div>
  </div>
+</div>
+<div id="exportChoice" class="modalcover hidden" style="z-index:95">
+  <div class="modal">
+    <h2>บันทึกภาพผังห้องเรียน</h2>
+    <p>จับภาพจากผังที่แสดงจริง พร้อมสี แสงเงา โต๊ะ กระดาน และประตู ไม่รวมปุ่มแก้ไข (ต้องเชื่อมต่ออินเทอร์เน็ตเพื่อใช้เครื่องมือจับภาพ)</p>
+    <div class="actionrow" style="margin-top:20px">
+      <button class="btn blue" id="exportJpg">ภาพ JPG</button>
+      <button class="btn primary" id="exportPdf">เอกสาร PDF</button>
+    </div>
+    <button class="btn" id="exportCancel" style="width:100%;margin-top:10px">ยกเลิก</button>
+  </div>
 </div>
 <div id="toast"></div>
 
@@ -814,11 +825,152 @@ button:disabled{opacity:.45;cursor:not-allowed}
     }
   };
 
-  $('exportData').onclick=()=>{
-    const blob=new Blob([JSON.stringify({...state,exportedAt:new Date().toISOString()},null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob), a=document.createElement('a');
-    a.href=url; a.download='classroom-7b-backup-v3.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); toast('ส่งออกข้อมูลแล้ว');
-  };
+  // Capture the visible board DOM, including its rendered CSS, rather than drawing a substitute.
+  // Requires html2canvas available from the CDN; failure is reported explicitly.
+  $('exportData').onclick=()=> $('exportChoice').classList.remove('hidden');
+  $('exportCancel').onclick=()=> $('exportChoice').classList.add('hidden');
+  $('exportChoice').addEventListener('click',e=>{if(e.target===$('exportChoice'))$('exportChoice').classList.add('hidden');});
+
+
+  let captureLoader=null;
+  function loadCaptureLibrary(){
+    if(typeof window.html2canvas==='function')return Promise.resolve();
+    if(captureLoader)return captureLoader;
+    captureLoader=new Promise((resolve,reject)=>{
+      const script=document.createElement('script');
+      script.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.crossOrigin='anonymous';
+      script.onload=()=>typeof window.html2canvas==='function'?resolve():reject(new Error('โหลดเครื่องมือจับภาพไม่สำเร็จ'));
+      script.onerror=()=>reject(new Error('ไม่สามารถโหลดเครื่องมือจับภาพได้ กรุณาเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่'));
+      document.head.appendChild(script);
+    }).catch(e=>{captureLoader=null;throw e;});
+    return captureLoader;
+  }
+  async function captureBoardExact(){
+    await loadCaptureLibrary();
+    await document.fonts.ready;
+    const board=$('board');
+    const output=await window.html2canvas(board,{
+      scale:Math.max(2,Math.min(3,1800/Math.max(board.getBoundingClientRect().width,1))),
+      backgroundColor:'#ffffff',
+      useCORS:true,
+      allowTaint:false,
+      logging:false,
+      scrollX:0,scrollY:0,
+      ignoreElements:el=>el.matches?.('.door-controls, .door-actions, .door-buttons, .drag-handle, [data-export-ignore]') || false,
+      onclone:doc=>{
+        const clone=doc.getElementById('board');
+        clone?.classList.remove('editing');
+        clone?.querySelectorAll('.selected,.isdragging').forEach(el=>el.classList.remove('selected','isdragging'));
+        clone?.querySelectorAll('.door-controls, .door-actions, .door-buttons, .drag-handle, [data-export-ignore]').forEach(el=>el.remove());
+        if(clone){clone.style.outline='none';clone.style.transition='none';}
+      }
+    });
+    if(!output.width||!output.height)throw Error('ไม่ได้รับภาพผังห้องเรียน');
+    return output;
+  }
+  function boardImage(){
+    const board=$('board'), rect=board.getBoundingClientRect();
+    const W=1400,H=Math.round(W*(rect.height/Math.max(rect.width,1))),ratio=W/100;
+    const c=document.createElement('canvas');c.width=W;c.height=H;
+    const ctx=c.getContext('2d');const px=x=>x*W/100,py=y=>y*H/100;
+    const round=(x,y,w,h,r,fill,stroke)=>{
+      r=Math.max(0,Math.min(r,w/2,h/2));ctx.beginPath();ctx.roundRect(x,y,w,h,r);
+      if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}
+    };
+    function label(text,x,y,maxWidth=250,size=20,color='#163854'){
+      ctx.fillStyle=color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`600 ${size}px Prompt, sans-serif`;
+      const str=String(text||'');
+      if(ctx.measureText(str).width>maxWidth){ctx.font=`600 ${Math.max(10,size*.72)}px Prompt, sans-serif`;}
+      ctx.fillText(str,x,y,maxWidth);
+    }
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+    // floor tiles visible on the real board
+    ctx.strokeStyle='#eff4fa';ctx.lineWidth=1;
+    for(let x=0;x<W;x+=110){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+    for(let y=0;y<H;y+=110){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    round(12,12,W-24,H-24,24,null,'#dce7f1');
+    // Furniture is placed using the same percentages as its actual board DOM.
+    const h=state.headings;
+    const furniture=[{type:'whiteboard',p:state.furniture.whiteboard},{type:'teacherDesk',p:state.furniture.teacherDesk},{type:'door',p:state.furniture.door},...(state.extraDoors||[]).map(p=>({type:'door',p}))];
+    for(const {type,p} of furniture){
+      if(!p)continue;const x=px(p.x),y=py(p.y);
+      let width,height,color,border,txt;
+      if(type==='whiteboard'){width=W*.34;height=H*.10;color='#edf5ff';border='#8caccb';txt=h.whiteboard;}
+      else if(type==='teacherDesk'){width=W*.25;height=H*.085;color='#5a8de6';border='#3073c1';txt=h.teacherDesk;}
+      else {width=W*.06;height=H*.08;color='#ffdd58';border='#d2a420';txt=h.door||'ประตู';}
+      round(x-width/2+2,y-height/2+10,width,height,14,'#bfcfe1',null);
+      round(x-width/2,y-height/2,width,height,14,color,border);
+      label(txt,x,y,width-12,Math.max(15,Math.min(25,height*.25)),type==='teacherDesk'?'#fff':'#233a4b');
+    }
+    // Group captions and seats
+    const groups=[...new Set([...state.seats.map(s=>s.group),...Object.keys(state.groups||{}).map(Number)])].sort((a,b)=>a-b);
+    for(const g of groups){
+      const ss=state.seats.filter(s=>s.group===g);
+      const cx=ss.length?ss.reduce((acc,p)=>acc+p.x,0)/ss.length:50;
+      const cy=ss.length?Math.min(...ss.map(p=>p.y)):45;
+      const p=state.groups?.[g]||{x:Math.max(10,Math.min(90,cx)),y:Math.max(14,cy-9)};
+      const x=px(p.x),y=py(p.y);
+      round(x-54,y-18,108,36,18,'#fff','#cfdcf0');label('กลุ่มที่ '+g,x,y,102,17);
+    }
+    const sw=W*.09,sh=H*.08;
+    for(const seat of [...state.seats].sort((a,b)=>a.no-b.no)){
+      const x=px(seat.x),y=py(seat.y),filled=!!seat.name;
+      const base=filled?'#b3e7c0':'#e3effd';
+      round(x-sw/2+2,y-sh/2+11,sw,sh,16,filled?'#67b37b':'#95b5d6',null);
+      round(x-sw/2,y-sh/2,sw,sh,16,base,filled?'#79be8c':'#a8c2df');
+      const chairY=seat.flip?y-sh/2-13:y+sh/2+5;
+      round(x-sw*.29,chairY,sw*.58,12,6,filled?'#7ac88d':'#92add8',null);
+      label(seat.no,x,y,sw-20,25);
+      if(seat.name){
+        let text=seat.name;
+        const nameY=seat.flip?y+sh/2+27:y+sh/2+30;
+        ctx.font='500 17px Prompt, sans-serif';const ww=Math.min(250,Math.max(72,ctx.measureText(text).width+18));
+        round(x-ww/2,nameY-13,ww,26,12,'#fff','#dce4ee');label(text,x,nameY,ww-12,17,'#476078');
+      }
+    }
+    return c;
+  }
+  function downloadBlob(blob,name){
+    const url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1800);
+  }
+  function jpegAsPdf(canvas){
+    // Valid one-page PDF with an embedded JPEG. Uses the board aspect ratio as page size.
+    const data=canvas.toDataURL('image/jpeg',.94).split(',')[1];
+    const raw=atob(data);const jpg=new Uint8Array(raw.length);
+    for(let i=0;i<raw.length;i++)jpg[i]=raw.charCodeAt(i);
+    const w=canvas.width,h=canvas.height;
+    const ptsW=700,ptsH=Math.round(ptsW*h/w);
+    const encoder=new TextEncoder(),parts=[],offsets=[0];let length=0;
+    const put=v=>{const arr=typeof v==='string'?encoder.encode(v):v;parts.push(arr);length+=arr.length;};
+    const object=(id,value)=>{offsets[id]=length;put(`${id} 0 obj\n`);put(value);put('\nendobj\n');};
+    put('%PDF-1.4\n');
+    object(1,'<< /Type /Catalog /Pages 2 0 R >>');
+    object(2,'<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+    object(3,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${ptsW} ${ptsH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
+    offsets[4]=length;put('4 0 obj\n');
+    put(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpg.length} >>\nstream\n`);
+    put(jpg);put('\nendstream\nendobj\n');
+    const content=`q\n${ptsW} 0 0 ${ptsH} 0 0 cm\n/Im0 Do\nQ\n`;
+    object(5,`<< /Length ${encoder.encode(content).length} >>\nstream\n${content}endstream`);
+    const start=length;put('xref\n0 6\n0000000000 65535 f \n');
+    for(let id=1;id<=5;id++)put(`${String(offsets[id]).padStart(10,'0')} 00000 n \n`);
+    put(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${start}\n%%EOF`);
+    return new Blob(parts,{type:'application/pdf'});
+  }
+  async function exportBoard(kind){
+    try{
+      const c=await captureBoardExact(),name='Classroom_7B_Seat_Layout';
+      if(kind==='jpg'){
+        const blob=await new Promise(resolve=>c.toBlob(resolve,'image/jpeg',.94));
+        if(!blob)throw Error('สร้างไฟล์ JPG ไม่สำเร็จ');downloadBlob(blob,name+'.jpg');
+      }else downloadBlob(jpegAsPdf(c),name+'.pdf');
+      $('exportChoice').classList.add('hidden');toast('บันทึกผังห้องเรียนเป็น '+kind.toUpperCase()+' แล้ว');
+    }catch(e){toast('บันทึกภาพไม่สำเร็จ: '+e.message);}
+  }
+  $('exportJpg').onclick=()=>exportBoard('jpg');
+  $('exportPdf').onclick=()=>exportBoard('pdf');
 
   $('importData').onclick=()=>$('importFile').click();
   $('importFile').onchange=async e=>{
